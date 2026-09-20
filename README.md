@@ -18,6 +18,18 @@ ffmpeg -version
 ffprobe -version
 ```
 
+## GPU support
+
+The script is **not NVIDIA-only**. When it needs to encode video, it tests available encoders and uses the first one that actually works:
+
+| Hardware | H.264 output | 10-bit HEVC HDR rungs |
+| --- | --- | --- |
+| Apple (macOS) | VideoToolbox | VideoToolbox |
+| NVIDIA | NVENC | NVENC |
+| AMD or Intel GPU | CPU fallback (`libx264`) | CPU fallback (`libx265`, if available) |
+
+AMD AMF, Intel Quick Sync, and VA-API hardware encoding are not implemented in this script. You can still run it on those machines, but video encoding uses the CPU. An H.264 source is copied without re-encoding by default, so that path does not need a GPU. GPU acceleration also depends on the installed FFmpeg build and working drivers; the script checks hardware encoders with a short test encode and falls back when a test fails. Some HDR conversion and scaling paths likewise require specific FFmpeg filters and may run on the CPU.
+
 ## Prepare a video
 
 ```bash
