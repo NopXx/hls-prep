@@ -1,4 +1,4 @@
-# HLS Studio
+# HLS Prep
 
 Tools for preparing a video file as a browser-playable HLS bundle with selectable audio tracks and text subtitles.
 
