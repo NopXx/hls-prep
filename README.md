@@ -20,7 +20,7 @@ ffprobe -version
 
 ## GPU support
 
-The script is **not NVIDIA-only**. When it needs to encode video, it tests available encoders and uses the first one that actually works:
+When the script needs to encode video, it tests available encoders and uses the first one that actually works:
 
 | Hardware | H.264 output | 10-bit HEVC HDR rungs |
 | --- | --- | --- |
