@@ -274,8 +274,11 @@ case "$video_transfer" in smpte2084 | arib-std-b67) is_hdr=1 ;; esac
 # under -strict unofficial; without it Apple sees the HDR10 base and misses the
 # DV. A re-encoded (tonemapped) rung drops DV either way, so it only matters when
 # the source stream is copied.
-dovi_probe=$(ffprobe -v error -select_streams v:0 \
-  -show_entries stream_side_data=side_data_type,dv_profile,dv_level,dv_bl_signal_compatibility_id -of default=nw=1 "$input" |
+# Older ffmpeg has no `stream_side_data` show_entries section and errors out on it.
+# Swallow that (2>/dev/null, || true): a build that cannot report the DV side data
+# also cannot preserve DV, so treating it as "no DV" is correct — has_dovi stays 0.
+dovi_probe=$({ ffprobe -v error -select_streams v:0 \
+  -show_entries stream_side_data=side_data_type,dv_profile,dv_level,dv_bl_signal_compatibility_id -of default=nw=1 "$input" 2>/dev/null || true; } |
   awk -F= '
     /^side_data_type=/ { active = (tolower($2) ~ /dovi|dolby vision/); if (active) found=1; profile=""; level=""; compat="" }
     active && /^dv_profile=/ { profile=$2 }
