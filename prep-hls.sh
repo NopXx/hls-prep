@@ -349,6 +349,18 @@ fi
 # ffmpeg's filter list, read once — the GPU paths below probe it.
 ff_filters=$(ffmpeg -hide_banner -filters 2>&1)
 
+# scale_cuda gained its `format` option (resize + pixel-format in one GPU pass)
+# only in newer ffmpeg; older builds (e.g. Kaggle's stock ffmpeg) reject it with
+# "Option 'format' not found". Detect it so the CUDA ladder can omit the option
+# on an 8-bit source (where it is a no-op anyway) and fall back to the CPU for a
+# 10-bit source it can no longer down-convert on the GPU.
+scale_cuda_format=0
+if ffmpeg -hide_banner -h filter=scale_cuda 2>/dev/null | grep -qw format; then
+  scale_cuda_format=1
+fi
+# The ":format=..." suffix to append to a scale_cuda, empty when unsupported.
+sc_yuv=$([ "$scale_cuda_format" = "1" ] && echo ":format=yuv420p" || echo "")
+
 # Apple Silicon can keep HEVC decode, HDR->SDR colour conversion/scaling, and
 # H.264 encode in VideoToolbox surfaces. `scale_vt` uses
 # VTPixelTransferSession; unlike h264_videotoolbox alone this also moves the
@@ -381,7 +393,8 @@ fi
 # CPU never touches a frame. A build without scale_cuda falls back to the CPU.
 gpu_ladder=0
 if [ -n "${PREP_LADDER:-}" ] && [ "$venc" = "h264_nvenc" ] && [ "$is_hdr" = "0" ] &&
-  echo "$ff_filters" | grep -q scale_cuda; then
+  echo "$ff_filters" | grep -q scale_cuda &&
+  { [ "$scale_cuda_format" = "1" ] || [ "$is_deep" = "0" ]; }; then
   gpu_ladder=1
 fi
 
@@ -392,7 +405,8 @@ fi
 # per-rung path, so this wants every rung encoded.
 gpu_hdr_ladder=0
 if [ -n "${PREP_LADDER:-}" ] && [ "$is_hdr" = "1" ] && [ "${PREP_GPU_TONEMAP:-0}" = "1" ] &&
-  [ "$venc" = "h264_nvenc" ] && [ "$copy_video" != "1" ] && echo "$ff_filters" | grep -q libplacebo; then
+  [ "$venc" = "h264_nvenc" ] && [ "$copy_video" != "1" ] && echo "$ff_filters" | grep -q libplacebo &&
+  [ "$scale_cuda_format" = "1" ]; then
   gpu_hdr_ladder=1
 fi
 
@@ -466,9 +480,9 @@ add_encoded_video() {
     # keeps the aspect and an even width. A source-height top rung still runs
     # through it — a cheap no-op resize that also does any 10-bit->8-bit drop.
     if [ "$scale_mode" = "none" ]; then
-      video_args+=(-filter:v:"$i" "scale_cuda=${video_width}:${video_height}:format=yuv420p")
+      video_args+=(-filter:v:"$i" "scale_cuda=${video_width}:${video_height}${sc_yuv}")
     else
-      video_args+=(-filter:v:"$i" "scale_cuda=${scale_w}:${scale_h}:format=yuv420p")
+      video_args+=(-filter:v:"$i" "scale_cuda=${scale_w}:${scale_h}${sc_yuv}")
     fi
   else
     vf="$base_vf"
@@ -519,7 +533,8 @@ fi
 
 gpu_hdr_passthrough=0
 if [ "$is_hdr" = "1" ] && [ "$requested_hdr_rungs" = "1" ] && [ "$requested_sdr_rungs" = "0" ] && \
-  [ "$hdr_venc" = "hevc_nvenc" ] && echo "$ff_filters" | grep -q scale_cuda; then
+  [ "$hdr_venc" = "hevc_nvenc" ] && echo "$ff_filters" | grep -q scale_cuda && \
+  [ "$scale_cuda_format" = "1" ]; then
   gpu_hdr_passthrough=1
 fi
 
