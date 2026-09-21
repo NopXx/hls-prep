@@ -445,6 +445,21 @@ rung_bitrate() {
   fi
 }
 
+# True when the user gave an explicit (non-auto) PREP_LADDER_BITRATES target for
+# height $1. Such a rung is meant to be re-encoded to that bitrate — so the top
+# rung is not stream-copied out from under an intended shrink.
+rung_explicit() {
+  local entry key value custom=()
+  IFS=',' read -r -a custom <<< "${PREP_LADDER_BITRATES:-}"
+  for entry in "${custom[@]}"; do
+    key=${entry%%:*}; value=${entry#*:}
+    if [ "$entry" != "$value" ] && [ "$key" = "$1" ] && [ -n "$value" ] && [ "${value,,}" != "auto" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Adds one encoded video output at index $1, scaled to height $2 (empty keeps
 # the source height). Used for every ladder rung and the single re-encode.
 add_encoded_video() {
@@ -792,15 +807,16 @@ if [ -n "${PREP_LADDER:-}" ]; then
   elif [ "${#heights[@]}" -gt 0 ]; then
     # The encoded rungs. Without a raw rung the top one still copies when the
     # source is already deliverable (H.264 unless forced to encode, or
-    # PREP_COPY_VIDEO=1 on an HEVC
-    # the viewers can take); a raw rung is the copy instead, so the rest all
-    # re-encode.
+    # PREP_COPY_VIDEO=1 on an HEVC the viewers can take); a raw rung is the copy
+    # instead, so the rest all re-encode. An explicit PREP_LADDER_BITRATES target
+    # for that height overrides the copy — the user asked to re-encode (to shrink)
+    # to that bitrate.
     for h in "${heights[@]}"; do
       # A cropped source can be source-sized at a nominally taller tier:
       # 1920x800 -> 1080p, 1280x536 -> 720p, 3840x1600 -> 2160p.
       hh=$h
       if rung_is_source_size "$h"; then hh=''; fi
-      if [ "$want_raw" = "0" ] && [ "$nvid" = "0" ] && [ "$copy_video" = "1" ] && [ -z "$hh" ]; then
+      if [ "$want_raw" = "0" ] && [ "$nvid" = "0" ] && [ "$copy_video" = "1" ] && [ -z "$hh" ] && ! rung_explicit "$h"; then
         video_maps+=(-map 0:v:0)
         video_args+=(-c:v:"$nvid" copy)
         if [ "$video_codec" = "hevc" ]; then
