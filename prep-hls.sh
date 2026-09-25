@@ -142,6 +142,9 @@ video_pixfmt=$(probe_video pix_fmt)
 video_transfer=$(probe_video color_transfer)
 video_primaries=$(probe_video color_primaries)
 video_space=$(probe_video color_space)
+# ffprobe reports a rational ("24000/1001"); a playlist wants a decimal, and
+# three places is what Apple's own examples carry.
+video_fps=$(probe_video r_frame_rate | awk -F/ 'NF==2 && $2 > 0 { printf "%.3f", $1 / $2; exit } NF==1 && $1 > 0 { printf "%.3f", $1; exit }')
 video_width=$(probe_video width)
 video_height=$(probe_video height)
 video_bitrate=$(probe_video bit_rate)
@@ -892,6 +895,12 @@ codec_string() {
     ac3) echo 'ac-3' ;;
     flac) echo 'fLaC' ;;
     truehd) echo 'mlpa' ;;
+    # The DTS core, which every DTS variant carries. Naming the extension
+    # (dtsh/dtsl) would take the stream profile, and a player that cannot do
+    # the core cannot do those either. Returning nothing, as this did, leaves
+    # the group with no codec at all, and a cloned variant then keeps the
+    # CODECS of the one above it — advertising a codec it does not serve.
+    dts) echo 'dtsc' ;;
     *) echo '' ;;
   esac
 }
@@ -969,7 +978,7 @@ multi=0; [ "${#channel_list[@]}" -gt 1 ] && multi=1
 maps=("${video_maps[@]}")
 codec_args=()
 map_parts=()
-groups=(); gbitrate=(); gcodec=()
+groups=(); gbitrate=(); gcodec=(); gdefault=()
 out_index=0
 needs_experimental=0
 
@@ -981,7 +990,7 @@ group_idx() {
   for i in "${!groups[@]}"; do
     if [ "${groups[$i]}" = "$g" ]; then gi=$i; return; fi
   done
-  groups+=("$g"); gbitrate+=(0); gcodec+=('')
+  groups+=("$g"); gbitrate+=(0); gcodec+=(''); gdefault+=(0)
   gi=$((${#groups[@]} - 1))
 }
 
@@ -1011,10 +1020,25 @@ for spec in "${channel_list[@]}"; do
   else
     group="a$spec"
   fi
-  group_idx "$group"
 
   for i in "${!a_codec[@]}"; do
     codec=${a_codec[$i]}; channels=${a_channels[$i]}; language=${a_lang[$i]}; title=${a_title[$i]}
+
+    # A rendition group is a set of interchangeable alternatives, and a
+    # variant's CODECS is the union across it. Carry DTS or TrueHD beside AC-3
+    # and that union promises a codec only some members need: a client that
+    # trusts it either refuses the whole variant or opens the one track it
+    # cannot decode — AVPlayer answers "Cannot Open" and says no more. They get
+    # a group of their own instead, so a player that wants them can still find
+    # them and one that cannot simply never sees them.
+    track_group=$group
+    if [ "$spec" = "raw" ]; then
+      case "$codec" in dts|truehd) track_group="araw${codec}" ;; esac
+    fi
+    # Per track rather than per rendition: the raw group must not be created
+    # when every raw track turns out to be one of the split-off codecs, or a
+    # variant would point at a group with nothing in it.
+    group_idx "$track_group"
 
     if [ "$audio_mode" = "browser-copy" ]; then
       case "$codec" in
@@ -1026,8 +1050,9 @@ for spec in "${channel_list[@]}"; do
           [ "$kbps" -gt "${gbitrate[$gi]}" ] && gbitrate[$gi]=$kbps
           name=$(echo "$title" | tr ' ' '-' | tr -cd '[:alnum:]._-')
           [ -n "$name" ] || name=$language
-          default=$([ "$out_index" = 0 ] && echo ,default:yes || echo '')
-          map_parts+=("a:$out_index,agroup:$group,language:$language,name:$name$default")
+          default=''
+          [ "${gdefault[$gi]}" = "0" ] && { default=,default:yes; gdefault[$gi]=1; }
+          map_parts+=("a:$out_index,agroup:$track_group,language:$language,name:$name$default")
           echo "audio $i: $codec ${channels}ch $language — copying for browser playback"
           out_index=$((out_index + 1))
           ;;
@@ -1073,8 +1098,12 @@ for spec in "${channel_list[@]}"; do
       name=$(echo "$title" | tr ' ' '-' | tr -cd '[:alnum:]._-')
       [ -n "$name" ] || name=$language
     fi
-    default=$([ "$out_index" = 0 ] && echo ,default:yes || echo '')
-    map_parts+=("a:$out_index,agroup:$group,language:$language,name:$name$default")
+    # Per group, not per file: ffmpeg marks nothing DEFAULT on its own, so a
+    # single global flag left every group after the first without one, and a
+    # player then picks by its own rules rather than the one meant to lead.
+    default=''
+    [ "${gdefault[$gi]}" = "0" ] && { default=,default:yes; gdefault[$gi]=1; }
+    map_parts+=("a:$out_index,agroup:$track_group,language:$language,name:$name$default")
     out_index=$((out_index + 1))
   done
 done
@@ -1083,7 +1112,7 @@ done
 # the job valid by producing video-only HLS instead of trying to reference an
 # empty audio group.
 if [ "$out_index" -eq 0 ]; then
-  groups=(); gbitrate=(); gcodec=()
+  groups=(); gbitrate=(); gcodec=(); gdefault=()
   echo "audio: no browser-copy compatible tracks kept; output will be video-only" >&2
 fi
 
@@ -1312,7 +1341,7 @@ if [ -f "$master" ]; then
   # break the quoted CODECS, so the edits are done with match/substr.
   awk -v hvc="$hvc" -v range="$range" -v firstaudio="$first_audio" -v extra="$extra_spec" \
       -v dvsupp="$dv_supp" -v hevcs="$hevc_sequences" -v hdrs="$hdr_sequences" -v dvs="$dv_sequences" \
-      -v hvcspec="$hvc_spec" '
+      -v hvcspec="$hvc_spec" -v fps="$video_fps" '
     function set_attr(line, key, val,   pre, rest, p) {
       # Replace key="..." if present, else append it.
       p = index(line, key "=\"")
@@ -1360,6 +1389,14 @@ if [ -f "$master" ]; then
       # it even when it already managed to write the HEVC CODECS attribute.
       if (ishdr && index(lines[NR], "VIDEO-RANGE=") == 0)
         lines[NR] = lines[NR] ",VIDEO-RANGE=" range (isdv ? dvsupp : "")
+      # AVFoundation discards an HDR variant that declares no FRAME-RATE: it
+      # never reaches the variant list, so nothing downstream can select it or
+      # say why. SDR is exempt, which is what makes it hard to see — the h264
+      # rungs keep working and only the HDR one goes missing, until a ladder
+      # pruned to that rung leaves a player with nothing at all. The Apple
+      # authoring rules ask for it on every video variant regardless.
+      if (fps != "" && index(lines[NR], "FRAME-RATE=") == 0)
+        lines[NR] = lines[NR] ",FRAME-RATE=" fps
       sinf[++ns] = NR
     }
     END {
