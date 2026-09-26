@@ -1045,6 +1045,7 @@ for spec in "${channel_list[@]}"; do
         aac|flac|ac3|eac3)
           maps+=(-map "0:a:$i")
           codec_args+=(-c:a:"$out_index" copy)
+          [ "$codec" = "flac" ] && needs_experimental=1
           add_group_codec "$gi" "$(codec_string "$codec")"
           kbps=640; [ -n "${a_bitrate[$i]}" ] && [ "${a_bitrate[$i]}" != "N/A" ] && kbps=$((a_bitrate[i] / 1000))
           [ "$kbps" -gt "${gbitrate[$gi]}" ] && gbitrate[$gi]=$kbps
@@ -1070,7 +1071,7 @@ for spec in "${channel_list[@]}"; do
       # Stream copy keeps source timestamps and metadata such as Atmos.
       maps+=(-map "0:a:$i")
       codec_args+=(-c:a:"$out_index" copy)
-      [ "$codec" = "truehd" ] && needs_experimental=1
+      case "$codec" in flac|truehd) needs_experimental=1 ;; esac
       add_group_codec "$gi" "$(codec_string "$codec")"
       kbps=640; [ -n "${a_bitrate[$i]}" ] && [ "${a_bitrate[$i]}" != "N/A" ] && kbps=$((a_bitrate[i] / 1000))
       [ "$kbps" -gt "${gbitrate[$gi]}" ] && gbitrate[$gi]=$kbps
@@ -1235,7 +1236,7 @@ fi
 if [ "$copied_hevc" = "1" ] && [ "$has_dovi" = "1" ]; then
   echo "  raw rung: keeping Dolby Vision (writing dvcC via -strict unofficial)"
 fi
-[ "$needs_experimental" = "1" ] && echo "  original TrueHD audio: enabling experimental MP4 support"
+[ "$needs_experimental" = "1" ] && echo "  original FLAC/TrueHD audio: enabling experimental MP4 support"
 # -nostdin, on every ffmpeg call here: ffmpeg otherwise polls the terminal for
 # its interactive keys (q to quit), and a process in a background process group
 # that reads its controlling terminal is stopped by SIGTTIN. That is a job
