@@ -970,6 +970,15 @@ else
   if [ "${PREP_COPY_AUDIO:-0}" = "1" ] && [[ " ${channel_list[*]} " != *" raw "* ]]; then
     if [ "$channels_set" = "1" ]; then channel_list+=(raw); else channel_list=(raw); fi
   fi
+  # DTS is kept only as a bitstream copy, never transcoded into AAC. Ensure
+  # the raw rendition exists even when the UI asks for stereo/5.1 only.
+  for codec in "${a_codec[@]}"; do
+    if [ "$codec" = dts ] && [[ " ${channel_list[*]} " != *" raw "* ]]; then
+      channel_list+=(raw)
+      echo "audio policy: DTS detected — adding untouched original rendition"
+      break
+    fi
+  done
   [ "${#channel_list[@]}" -gt 4 ] && { echo "PREP_AUDIO_CHANNELS takes at most 4 renditions" >&2; exit 1; }
 fi
 
@@ -1023,6 +1032,10 @@ for spec in "${channel_list[@]}"; do
 
   for i in "${!a_codec[@]}"; do
     codec=${a_codec[$i]}; channels=${a_channels[$i]}; language=${a_lang[$i]}; title=${a_title[$i]}
+    if [ "$codec" = dts ] && [ "$spec" != raw ] && [ "$audio_mode" != "browser-copy" ]; then
+      echo "audio $i: dts ${channels}ch $language — skipping AAC rendition; original will be copied"
+      continue
+    fi
 
     # A rendition group is a set of interchangeable alternatives, and a
     # variant's CODECS is the union across it. Carry DTS or TrueHD beside AC-3
